@@ -2,8 +2,8 @@ name: Sync Slack Messages
 
 on:
   schedule:
-    # Run every 15 minutes
-    - cron: '*/15 * * * *'
+    # Run every hour at 59 minute mark
+    - cron: '59 * * * *'
   workflow_dispatch: # Allow manual triggering
 
 jobs:
