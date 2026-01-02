@@ -23,14 +23,105 @@ async function getLastSyncTime(channelId) {
   return Math.floor(new Date(data[0].timestamp).getTime() / 1000);
 }
 
+// Cache for user data to avoid hitting Slack API limits and unnecessary DB writes
+// Map<userId, { slackUser: Object, lastChecked: number, dbSynced: boolean }>
+const usersCache = new Map();
+
+async function getUser(userId) {
+  // Check cache first
+  if (usersCache.has(userId)) {
+    return usersCache.get(userId).slackUser;
+  }
+
+  try {
+    const userInfo = await slack.users.info({ user: userId });
+    if (userInfo.ok && userInfo.user) {
+      usersCache.set(userId, {
+        slackUser: userInfo.user,
+        lastChecked: Date.now(),
+        dbSynced: false
+      });
+      return userInfo.user;
+    }
+  } catch (err) {
+    console.error(`Error fetching user ${userId}:`, err.message);
+  }
+  return null;
+}
+
+async function syncUser(slackUser) {
+  if (!slackUser || !slackUser.id) return;
+
+  const cacheEntry = usersCache.get(slackUser.id);
+  // If we already synced this user in this run, skip
+  if (cacheEntry && cacheEntry.dbSynced) return;
+
+  try {
+    // Check if user exists in DB and compare updated timestamp
+    const { data: dbUser, error: fetchError } = await supabase
+      .from('users')
+      .select('updated')
+      .eq('id', slackUser.id)
+      .single();
+
+    const needsUpdate = !dbUser || (slackUser.updated > (dbUser.updated || 0));
+
+    if (needsUpdate) {
+      console.log(`Syncing user ${slackUser.name} (${slackUser.id})...`);
+      const { error: upsertError } = await supabase
+        .from('users')
+        .upsert([
+          {
+            id: slackUser.id,
+            team_id: slackUser.team_id,
+            name: slackUser.name,
+            real_name: slackUser.real_name,
+            display_name: slackUser.profile?.display_name,
+            email: slackUser.profile?.email,
+            deleted: slackUser.deleted,
+            is_bot: slackUser.is_bot,
+            is_admin: slackUser.is_admin,
+            is_owner: slackUser.is_owner,
+            updated: slackUser.updated,
+            raw_json: slackUser,
+            // created_at defaults to NOW()
+          }
+        ], { onConflict: 'id' });
+
+      if (upsertError) {
+        console.error(`Error upserting user ${slackUser.name}:`, upsertError);
+      } else {
+        console.log(`✓ User ${slackUser.name} synced`);
+      }
+    }
+
+    // Update cache to mark as synced
+    if (cacheEntry) {
+      cacheEntry.dbSynced = true;
+      usersCache.set(slackUser.id, cacheEntry);
+    } else {
+      usersCache.set(slackUser.id, {
+        slackUser: slackUser,
+        lastChecked: Date.now(),
+        dbSynced: true
+      });
+    }
+
+  } catch (err) {
+    console.error(`Error syncing user ${slackUser.id}:`, err);
+  }
+}
+
 async function storeMessage(message, channelId, channelName) {
   let username = null;
+
   if (message.user) {
-    try {
-      const userInfo = await slack.users.info({ user: message.user });
-      username = userInfo.user.name;
-    } catch (err) {
-      console.error('Error fetching user:', err);
+    const user = await getUser(message.user);
+    if (user) {
+      username = user.name;
+      // Trigger user sync in background/fire-and-forget or await if strict consistency needed
+      // Awaiting specifically to ensure we capture the user data before message referencing it potentially
+      await syncUser(user);
     }
   }
 
