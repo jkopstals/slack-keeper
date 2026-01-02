@@ -1,0 +1,8 @@
+{
+  "name": "slack-archiver",
+  "version": "1.0.0",
+  "dependencies": {
+    "@slack/web-api": "^6.12.0",
+    "@supabase/supabase-js": "^2.39.0"
+  }
+}
