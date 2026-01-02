@@ -1,3 +1,28 @@
+const { WebClient } = require('@slack/web-api');
+const { createClient } = require('@supabase/supabase-js');
+
+const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_KEY
+);
+
+async function getLastSyncTime(channelId) {
+  const { data, error } = await supabase
+    .from('messages')
+    .select('timestamp')
+    .eq('channel_id', channelId)
+    .order('timestamp', { ascending: false })
+    .limit(1);
+
+  if (error || !data || data.length === 0) {
+    // Default to 90 days ago (Slack free tier limit)
+    return Math.floor(Date.now() / 1000) - (90 * 24 * 60 * 60);
+  }
+
+  return Math.floor(new Date(data[0].timestamp).getTime() / 1000);
+}
+
 async function storeMessage(message, channelId, channelName) {
   let username = null;
   if (message.user) {
@@ -13,8 +38,8 @@ async function storeMessage(message, channelId, channelName) {
     .from('messages')
     .upsert([
       {
-        id: `${channelId}-${message.ts}`,  // Use channelId parameter
-        channel_id: channelId,              // Use channelId parameter
+        id: `${channelId}-${message.ts}`,
+        channel_id: channelId,
         channel_name: channelName,
         user_id: message.user,
         username: username,
@@ -61,7 +86,7 @@ async function syncChannel(channelId, channelName) {
 
     for (const message of result.messages) {
       if (message.user) {
-        await storeMessage(message, channelId, channelName);  // Pass channelId
+        await storeMessage(message, channelId, channelName);
         newMessages++;
       }
     }
@@ -78,3 +103,28 @@ async function syncChannel(channelId, channelName) {
   console.log(`✓ Synced ${newMessages} new messages from ${channelName}`);
   return newMessages;
 }
+
+async function main() {
+  try {
+    console.log('Starting sync...');
+    
+    // Get all public channels
+    const channelsResult = await slack.conversations.list({
+      types: 'public_channel',
+      exclude_archived: true,
+    });
+
+    let totalMessages = 0;
+    for (const channel of channelsResult.channels) {
+      const count = await syncChannel(channel.id, channel.name);
+      totalMessages += count;
+    }
+
+    console.log(`\n✅ Sync complete! Total new messages: ${totalMessages}`);
+  } catch (err) {
+    console.error('❌ Sync failed:', err);
+    process.exit(1);
+  }
+}
+
+main();
