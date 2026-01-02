@@ -57,46 +57,57 @@ async function storeMessage(message, channelId, channelName) {
 
 async function syncChannel(channelId, channelName) {
   console.log(`Syncing ${channelName}...`);
-  
-  // Try to join the channel first
+
+  // Try to join the channel (only works for public channels)
   try {
     await slack.conversations.join({ channel: channelId });
     console.log(`✓ Joined ${channelName}`);
   } catch (err) {
     if (err.data?.error === 'already_in_channel') {
       console.log(`✓ Already in ${channelName}`);
+    } else if (err.data?.error === 'method_not_supported_for_channel_type') {
+      // Private channel - bot must be manually invited
+      console.log(`✓ Private channel ${channelName} (manual invite required)`);
+    } else if (err.data?.error === 'channel_not_found') {
+      console.log(`✗ Cannot access ${channelName} (not invited)`);
+      return 0;
     } else {
       console.error(`Failed to join ${channelName}:`, err.data?.error);
       return 0;
     }
   }
-  
+
   const lastSync = await getLastSyncTime(channelId);
   let newMessages = 0;
   let cursor;
   let hasMore = true;
 
   while (hasMore) {
-    const result = await slack.conversations.history({
-      channel: channelId,
-      oldest: lastSync.toString(),
-      limit: 200,
-      cursor: cursor,
-    });
+    try {
+      const result = await slack.conversations.history({
+        channel: channelId,
+        oldest: lastSync.toString(),
+        limit: 200,
+        cursor: cursor,
+      });
 
-    for (const message of result.messages) {
-      if (message.user) {
-        await storeMessage(message, channelId, channelName);
-        newMessages++;
+      for (const message of result.messages) {
+        if (message.user) {
+          await storeMessage(message, channelId, channelName);
+          newMessages++;
+        }
       }
-    }
 
-    hasMore = result.has_more;
-    cursor = result.response_metadata?.next_cursor;
+      hasMore = result.has_more;
+      cursor = result.response_metadata?.next_cursor;
 
-    // Rate limiting
-    if (hasMore) {
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // Rate limiting
+      if (hasMore) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    } catch (err) {
+      console.error(`Error fetching history for ${channelName}:`, err.data?.error);
+      break;
     }
   }
 
@@ -107,16 +118,18 @@ async function syncChannel(channelId, channelName) {
 async function main() {
   try {
     console.log('Starting sync...');
-    
-    // Get all public channels
+
+    // Get all conversations the bot has access to
     const channelsResult = await slack.conversations.list({
-      types: 'public_channel',
+      types: 'public_channel,private_channel,im,mpim',  // All types
       exclude_archived: true,
     });
 
     let totalMessages = 0;
     for (const channel of channelsResult.channels) {
-      const count = await syncChannel(channel.id, channel.name);
+      // For DMs, channel.name might be undefined, use channel.id as fallback
+      const channelName = channel.name || channel.id;
+      const count = await syncChannel(channel.id, channelName);
       totalMessages += count;
     }
 
