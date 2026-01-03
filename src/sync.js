@@ -8,35 +8,54 @@ const supabase = createClient(
 );
 
 // Configuration
-const RECHECK_DAYS = parseInt(process.env.RECHECK_DAYS || '3', 10); // Days to re-check for edits/replies
+const RECHECK_BUFFER_HOURS = parseInt(process.env.RECHECK_BUFFER_HOURS || '24', 10); // Buffer before last sync
 const FULL_SYNC_DAYS = parseInt(process.env.FULL_SYNC_DAYS || '90', 10); // Slack free tier limit
 
-async function getTodaySyncStatus() {
-  const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
-
+async function getLastSuccessfulSync() {
   const { data, error } = await supabase
     .from('sync_log')
     .select('*')
-    .eq('sync_date', today)
+    .order('completed_at', { ascending: false })
+    .limit(1)
     .single();
 
-  return { hasRunToday: !!data, syncLog: data };
+  if (error || !data) {
+    return null;
+  }
+
+  return data;
 }
 
-async function recordSyncCompletion(totalMessages, totalReplies, channelsProcessed) {
-  const today = new Date().toISOString().split('T')[0];
-
+async function recordSyncStart() {
+  const syncId = Date.now().toString();
   const { error } = await supabase
     .from('sync_log')
-    .upsert([
+    .insert([
       {
-        sync_date: today,
-        completed_at: new Date().toISOString(),
-        total_messages: totalMessages,
-        total_replies: totalReplies,
-        channels_processed: channelsProcessed,
+        sync_id: syncId,
+        started_at: new Date().toISOString(),
+        status: 'running',
       }
-    ], { onConflict: 'sync_date' });
+    ]);
+
+  if (error) {
+    console.error('Error recording sync start:', error);
+  }
+
+  return syncId;
+}
+
+async function recordSyncCompletion(syncId, totalMessages, totalReplies, channelsProcessed) {
+  const { error } = await supabase
+    .from('sync_log')
+    .update({
+      completed_at: new Date().toISOString(),
+      status: 'completed',
+      total_messages: totalMessages,
+      total_replies: totalReplies,
+      channels_processed: channelsProcessed,
+    })
+    .eq('sync_id', syncId);
 
   if (error) {
     console.error('Error recording sync completion:', error);
@@ -118,7 +137,6 @@ async function syncUser(slackUser) {
     const needsUpdate = !dbUser || (slackUser.updated > (dbUser.updated || 0));
 
     if (needsUpdate) {
-      console.log(`Syncing user ${slackUser.name} (${slackUser.id})...`);
       const { error: upsertError } = await supabase
         .from('users')
         .upsert([
@@ -135,14 +153,11 @@ async function syncUser(slackUser) {
             is_owner: slackUser.is_owner,
             updated: slackUser.updated,
             raw_json: slackUser,
-            // created_at defaults to NOW()
           }
         ], { onConflict: 'id' });
 
       if (upsertError) {
         console.error(`Error upserting user ${slackUser.name}:`, upsertError);
-      } else {
-        console.log(`✓ User ${slackUser.name} synced`);
       }
     }
 
@@ -236,76 +251,37 @@ async function syncThreadReplies(channelId, channelName, threadTs) {
   return repliesCount;
 }
 
-async function recheckRecentMessages(channelId, channelName, daysToRecheck) {
-  console.log(`  ↻ Re-checking last ${daysToRecheck} days for edits and new replies...`);
+async function syncMessagesInRange(channelId, channelName, fromTimestamp, toTimestamp, label) {
+  const fromDate = new Date(fromTimestamp * 1000).toISOString().substring(0, 16);
+  const toDate = toTimestamp ? new Date(toTimestamp * 1000).toISOString().substring(0, 16) : 'now';
 
-  const recheckFrom = Math.floor(Date.now() / 1000) - (daysToRecheck * 24 * 60 * 60);
-  let updatedMessages = 0;
+  console.log(`  ${label} (${fromDate} to ${toDate})...`);
+
+  let processedMessages = 0;
   let newReplies = 0;
   let cursor;
   let hasMore = true;
 
   while (hasMore) {
     try {
-      const result = await slack.conversations.history({
-        channel: channelId,
-        oldest: recheckFrom.toString(),
-        limit: 200,
-        cursor: cursor,
-      });
-
-      for (const message of result.messages) {
-        if (message.user) {
-          // Re-store message (upsert will update if edited)
-          await storeMessage(message, channelId, channelName);
-          updatedMessages++;
-
-          // Check for new replies in threads
-          if (message.reply_count && message.reply_count > 0) {
-            const repliesCount = await syncThreadReplies(channelId, channelName, message.ts);
-            newReplies += repliesCount;
-          }
-        }
-      }
-
-      hasMore = result.has_more;
-      cursor = result.response_metadata?.next_cursor;
-
-      // Rate limiting
-      if (hasMore) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
-    } catch (err) {
-      console.error(`Error re-checking messages for ${channelName}:`, err.data?.error);
-      break;
-    }
-  }
-
-  console.log(`  ✓ Re-checked ${updatedMessages} messages, found ${newReplies} new replies`);
-  return { updatedMessages, newReplies };
-}
-
-async function syncNewMessages(channelId, channelName, fromTimestamp) {
-  console.log(`  → Fetching new messages since ${new Date(fromTimestamp * 1000).toISOString()}...`);
-
-  let newMessages = 0;
-  let newReplies = 0;
-  let cursor;
-  let hasMore = true;
-
-  while (hasMore) {
-    try {
-      const result = await slack.conversations.history({
+      const params = {
         channel: channelId,
         oldest: fromTimestamp.toString(),
         limit: 200,
         cursor: cursor,
-      });
+      };
+
+      // Add latest parameter if we have a toTimestamp
+      if (toTimestamp) {
+        params.latest = toTimestamp.toString();
+      }
+
+      const result = await slack.conversations.history(params);
 
       for (const message of result.messages) {
         if (message.user) {
           await storeMessage(message, channelId, channelName);
-          newMessages++;
+          processedMessages++;
 
           // If this message has replies, fetch them
           if (message.reply_count && message.reply_count > 0) {
@@ -323,22 +299,22 @@ async function syncNewMessages(channelId, channelName, fromTimestamp) {
         await new Promise(resolve => setTimeout(resolve, 1000));
       }
     } catch (err) {
-      console.error(`Error fetching new messages for ${channelName}:`, err.data?.error);
+      console.error(`Error fetching messages for ${channelName}:`, err.data?.error);
       break;
     }
   }
 
-  console.log(`  ✓ Synced ${newMessages} new messages and ${newReplies} replies`);
-  return { newMessages, newReplies };
+  console.log(`  ✓ Processed ${processedMessages} messages, ${newReplies} replies`);
+  return { processedMessages, newReplies };
 }
 
-async function syncChannel(channelId, channelName, isFullSync) {
+async function syncChannel(channelId, channelName, lastSync) {
   console.log(`\nSyncing ${channelName}...`);
 
   // Try to join the channel (only works for public channels)
   try {
     await slack.conversations.join({ channel: channelId });
-    console.log(`✓ Joined ${channelName}`);
+    console.log(`✓ Already in ${channelName}`);
   } catch (err) {
     if (err.data?.error === 'already_in_channel') {
       console.log(`✓ Already in ${channelName}`);
@@ -353,55 +329,80 @@ async function syncChannel(channelId, channelName, isFullSync) {
     }
   }
 
-  let totalNewMessages = 0;
-  let totalNewReplies = 0;
+  let totalProcessed = 0;
+  let totalReplies = 0;
 
-  if (isFullSync) {
-    console.log(`📅 FULL SYNC - Re-checking all available history (up to ${FULL_SYNC_DAYS} days)`);
+  if (!lastSync) {
+    // First ever sync - get all available history
+    console.log(`📅 INITIAL SYNC - Fetching all available history (up to ${FULL_SYNC_DAYS} days)`);
+    const fullSyncStart = Math.floor(Date.now() / 1000) - (FULL_SYNC_DAYS * 24 * 60 * 60);
 
-    // Full sync: fetch everything from the beginning or FULL_SYNC_DAYS ago
-    const oldestTimestamp = await getOldestTimestamp(channelId);
-    const fullSyncStart = oldestTimestamp || (Math.floor(Date.now() / 1000) - (FULL_SYNC_DAYS * 24 * 60 * 60));
-
-    const { newMessages, newReplies } = await syncNewMessages(channelId, channelName, fullSyncStart);
-    totalNewMessages += newMessages;
-    totalNewReplies += newReplies;
-
-  } else {
-    console.log(`⚡ INCREMENTAL SYNC - Checking last ${RECHECK_DAYS} days + new messages`);
-
-    // 1. Re-check recent messages for edits and new replies
-    const { updatedMessages, newReplies: recheckReplies } = await recheckRecentMessages(
+    const { processedMessages, newReplies } = await syncMessagesInRange(
       channelId,
       channelName,
-      RECHECK_DAYS
+      fullSyncStart,
+      null,
+      '→ Fetching all messages'
     );
-    totalNewReplies += recheckReplies;
+    totalProcessed += processedMessages;
+    totalReplies += newReplies;
 
-    // 2. Fetch truly new messages (beyond what we already have)
-    const lastSync = await getLastSyncTime(channelId);
-    const { newMessages, newReplies } = await syncNewMessages(channelId, channelName, lastSync);
-    totalNewMessages += newMessages;
-    totalNewReplies += newReplies;
+  } else {
+    // Calculate recheck window: last sync time - buffer
+    const lastSyncTime = new Date(lastSync.started_at).getTime() / 1000;
+    const recheckFrom = lastSyncTime - (RECHECK_BUFFER_HOURS * 60 * 60);
+    const lastMessageTime = await getLastSyncTime(channelId);
+
+    console.log(`⚡ INCREMENTAL SYNC`);
+    console.log(`   Last sync: ${lastSync.started_at} (${RECHECK_BUFFER_HOURS}h buffer)`);
+
+    // 1. Re-check messages that might have been edited or got new replies
+    //    (from lastSyncTime - buffer to lastSyncTime)
+    if (recheckFrom < lastSyncTime) {
+      const { processedMessages, newReplies } = await syncMessagesInRange(
+        channelId,
+        channelName,
+        recheckFrom,
+        lastSyncTime,
+        '↻ Re-checking for edits/replies'
+      );
+      totalReplies += newReplies;
+    }
+
+    // 2. Fetch truly new messages (from last message time to now)
+    if (lastMessageTime) {
+      const { processedMessages, newReplies } = await syncMessagesInRange(
+        channelId,
+        channelName,
+        lastMessageTime,
+        null,
+        '→ Fetching new messages'
+      );
+      totalProcessed += processedMessages;
+      totalReplies += newReplies;
+    }
   }
 
-  console.log(`✅ ${channelName}: ${totalNewMessages} new messages, ${totalNewReplies} replies`);
-  return { newMessages: totalNewMessages, newReplies: totalNewReplies };
+  console.log(`✅ ${channelName}: ${totalProcessed} new messages, ${totalReplies} replies`);
+  return { newMessages: totalProcessed, newReplies: totalReplies };
 }
 
 async function main() {
   try {
     console.log('🚀 Starting Slack sync...\n');
 
-    // Check if we've already run today
-    const { hasRunToday, syncLog } = await getTodaySyncStatus();
-    const isFullSync = !hasRunToday;
+    const syncId = await recordSyncStart();
+    const lastSync = await getLastSuccessfulSync();
 
-    if (hasRunToday) {
-      console.log(`✓ Already synced today at ${syncLog.completed_at}`);
-      console.log(`  Running incremental sync (re-checking last ${RECHECK_DAYS} days)\n`);
+    if (lastSync) {
+      const lastSyncDate = new Date(lastSync.completed_at);
+      const hoursSinceLastSync = (Date.now() - lastSyncDate.getTime()) / (1000 * 60 * 60);
+
+      console.log(`✓ Last successful sync: ${lastSync.completed_at}`);
+      console.log(`  (${hoursSinceLastSync.toFixed(1)} hours ago)`);
+      console.log(`  Re-checking ${RECHECK_BUFFER_HOURS}h buffer for edits/replies\n`);
     } else {
-      console.log(`✓ First sync of the day - running full sync\n`);
+      console.log(`✓ First sync ever - will fetch all available history\n`);
     }
 
     // Get all conversations the bot has access to
@@ -416,20 +417,19 @@ async function main() {
 
     for (const channel of channelsResult.channels) {
       const channelName = channel.name || channel.id;
-      const { newMessages, newReplies } = await syncChannel(channel.id, channelName, isFullSync);
+      const { newMessages, newReplies } = await syncChannel(channel.id, channelName, lastSync);
       totalMessages += newMessages;
       totalReplies += newReplies;
       channelsProcessed++;
     }
 
-    // Record this sync
-    await recordSyncCompletion(totalMessages, totalReplies, channelsProcessed);
+    // Record this sync as completed
+    await recordSyncCompletion(syncId, totalMessages, totalReplies, channelsProcessed);
 
     console.log(`\n✅ Sync complete!`);
-    console.log(`   📊 Total new messages: ${totalMessages}`);
-    console.log(`   💬 Total replies: ${totalReplies}`);
-    console.log(`   📁 Channels processed: ${channelsProcessed}`);
-    console.log(`   🔄 Sync type: ${isFullSync ? 'FULL' : 'INCREMENTAL'}`);
+    console.log(`   📊 New messages: ${totalMessages}`);
+    console.log(`   💬 Replies: ${totalReplies}`);
+    console.log(`   📁 Channels: ${channelsProcessed}`);
 
   } catch (err) {
     console.error('❌ Sync failed:', err);
