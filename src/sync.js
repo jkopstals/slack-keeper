@@ -146,6 +146,46 @@ async function storeMessage(message, channelId, channelName) {
   }
 }
 
+async function syncThreadReplies(channelId, channelName, threadTs) {
+  let repliesCount = 0;
+  let cursor;
+  let hasMore = true;
+
+  while (hasMore) {
+    try {
+      const result = await slack.conversations.replies({
+        channel: channelId,
+        ts: threadTs,
+        limit: 200,
+        cursor: cursor,
+      });
+
+      for (const message of result.messages) {
+        // Skip the parent message (it's already stored)
+        if (message.ts === threadTs) continue;
+
+        if (message.user) {
+          await storeMessage(message, channelId, channelName);
+          repliesCount++;
+        }
+      }
+
+      hasMore = result.has_more;
+      cursor = result.response_metadata?.next_cursor;
+
+      // Rate limiting
+      if (hasMore) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    } catch (err) {
+      console.error(`Error fetching replies for thread ${threadTs}:`, err.data?.error);
+      break;
+    }
+  }
+
+  return repliesCount;
+}
+
 async function syncChannel(channelId, channelName) {
   console.log(`Syncing ${channelName}...`);
 
@@ -170,6 +210,7 @@ async function syncChannel(channelId, channelName) {
 
   const lastSync = await getLastSyncTime(channelId);
   let newMessages = 0;
+  let newReplies = 0;
   let cursor;
   let hasMore = true;
 
@@ -186,6 +227,13 @@ async function syncChannel(channelId, channelName) {
         if (message.user) {
           await storeMessage(message, channelId, channelName);
           newMessages++;
+
+          // If this message has replies, fetch them
+          if (message.reply_count && message.reply_count > 0) {
+            console.log(`  → Fetching ${message.reply_count} replies from thread ${message.ts}`);
+            const repliesCount = await syncThreadReplies(channelId, channelName, message.ts);
+            newReplies += repliesCount;
+          }
         }
       }
 
@@ -202,8 +250,8 @@ async function syncChannel(channelId, channelName) {
     }
   }
 
-  console.log(`✓ Synced ${newMessages} new messages from ${channelName}`);
-  return newMessages;
+  console.log(`✓ Synced ${newMessages} new messages and ${newReplies} replies from ${channelName}`);
+  return newMessages + newReplies;
 }
 
 async function main() {
