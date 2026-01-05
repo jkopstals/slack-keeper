@@ -1,0 +1,1170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Slack Archive Viewer</title>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  
+  <style>
+    :root {
+      --bg-primary: #fdfcfa;
+      --bg-secondary: #f8f6f3;
+      --bg-hover: #f1eeea;
+      --bg-thread: #fcfaf7;
+      
+      --text-primary: #1a1816;
+      --text-secondary: #5f5a54;
+      --text-tertiary: #9e978f;
+      
+      --border-light: #e8e4df;
+      --border-medium: #d4cfc7;
+      
+      --accent-primary: #d97706;
+      --accent-hover: #b45309;
+      --accent-light: #fed7aa;
+      
+      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+      --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.05);
+      --shadow-lg: 0 10px 25px rgba(0, 0, 0, 0.08);
+      
+      --serif: 'Instrument Serif', serif;
+      --sans: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: var(--sans);
+      font-size: 15px;
+      line-height: 1.5;
+      color: var(--text-primary);
+      background: var(--bg-secondary);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    
+    #root {
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .app-header {
+      background: var(--bg-primary);
+      border-bottom: 1px solid var(--border-light);
+      padding: 0 24px;
+      height: 60px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      box-shadow: var(--shadow-sm);
+      position: relative;
+      z-index: 10;
+    }
+    
+    .app-title {
+      font-family: var(--serif);
+      font-size: 22px;
+      font-weight: 400;
+      font-style: italic;
+      color: var(--text-primary);
+      letter-spacing: -0.01em;
+    }
+    
+    .channel-selector {
+      position: relative;
+    }
+    
+    .channel-select {
+      font-family: var(--sans);
+      font-size: 14px;
+      font-weight: 500;
+      padding: 8px 32px 8px 12px;
+      border: 1px solid var(--border-medium);
+      border-radius: 6px;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      cursor: pointer;
+      transition: all 0.15s ease;
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg width='12' height='8' viewBox='0 0 12 8' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1.5L6 6.5L11 1.5' stroke='%235f5a54' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 10px center;
+    }
+    
+    .channel-select:hover {
+      border-color: var(--accent-primary);
+      background-color: var(--bg-hover);
+    }
+    
+    .channel-select:focus {
+      outline: none;
+      border-color: var(--accent-primary);
+      box-shadow: 0 0 0 3px var(--accent-light);
+    }
+    
+    .main-container {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+    }
+    
+    .messages-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg-primary);
+      position: relative;
+    }
+    
+    .messages-scroll {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px 0;
+      scroll-behavior: smooth;
+    }
+    
+    .messages-scroll::-webkit-scrollbar {
+      width: 8px;
+    }
+    
+    .messages-scroll::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    
+    .messages-scroll::-webkit-scrollbar-thumb {
+      background: var(--border-medium);
+      border-radius: 4px;
+    }
+    
+    .messages-scroll::-webkit-scrollbar-thumb:hover {
+      background: var(--text-tertiary);
+    }
+    
+    .load-more-container {
+      padding: 16px 0;
+      text-align: center;
+      border-bottom: 1px solid var(--border-light);
+    }
+    
+    .load-more-btn {
+      font-family: var(--sans);
+      font-size: 13px;
+      font-weight: 500;
+      padding: 10px 20px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-medium);
+      border-radius: 6px;
+      color: var(--accent-primary);
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    
+    .load-more-btn:hover {
+      background: var(--bg-hover);
+      border-color: var(--accent-primary);
+      transform: translateY(-1px);
+      box-shadow: var(--shadow-sm);
+    }
+    
+    .load-more-btn:active {
+      transform: translateY(0);
+    }
+    
+    .load-more-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+    
+    .message-group {
+      padding: 8px 24px;
+      transition: background-color 0.15s ease;
+      animation: messageAppear 0.3s ease;
+    }
+    
+    @keyframes messageAppear {
+      from {
+        opacity: 0;
+        transform: translateY(8px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+    
+    .message-group:hover {
+      background: var(--bg-hover);
+    }
+    
+    .message-header {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin-bottom: 4px;
+    }
+    
+    .message-header.hidden {
+      display: none;
+    }
+    
+    .message-author {
+      font-weight: 600;
+      color: var(--text-primary);
+      font-size: 15px;
+    }
+    
+    .message-timestamp {
+      font-size: 12px;
+      color: var(--text-tertiary);
+      font-weight: 400;
+    }
+    
+    .message-timestamp.compact {
+      position: absolute;
+      left: -60px;
+      opacity: 0;
+      transition: opacity 0.2s ease;
+    }
+    
+    .message-group:hover .message-timestamp.compact {
+      opacity: 1;
+    }
+    
+    .message-content {
+      color: var(--text-primary);
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+    
+    .message-group.compact {
+      padding-top: 2px;
+      padding-bottom: 2px;
+      position: relative;
+    }
+    
+    .message-group.compact .message-content {
+      margin-left: 0;
+    }
+    
+    .user-mention {
+      background: var(--accent-light);
+      color: var(--accent-hover);
+      padding: 1px 4px;
+      border-radius: 3px;
+      font-weight: 500;
+    }
+    
+    .thread-container {
+      margin-top: 12px;
+      margin-left: 40px;
+      border-left: 2px solid var(--border-medium);
+      padding-left: 20px;
+      background: var(--bg-thread);
+      padding: 12px 16px 12px 20px;
+      border-radius: 8px;
+      margin-right: 20px;
+    }
+    
+    .thread-toggle {
+      font-size: 13px;
+      color: var(--accent-primary);
+      font-weight: 500;
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 4px 0;
+      margin-top: 4px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.15s ease;
+    }
+    
+    .thread-toggle:hover {
+      color: var(--accent-hover);
+      gap: 6px;
+    }
+    
+    .thread-reply {
+      padding: 8px 0;
+      border-top: 1px solid var(--border-light);
+      animation: replyAppear 0.25s ease;
+    }
+    
+    @keyframes replyAppear {
+      from {
+        opacity: 0;
+        transform: translateX(-8px);
+      }
+      to {
+        opacity: 1;
+        transform: translateX(0);
+      }
+    }
+    
+    .thread-reply:first-child {
+      border-top: none;
+      padding-top: 12px;
+    }
+    
+    .reply-author {
+      font-weight: 600;
+      color: var(--text-secondary);
+      font-size: 14px;
+      margin-right: 6px;
+    }
+    
+    .reply-author.hidden {
+      display: none;
+    }
+    
+    .reply-timestamp {
+      font-size: 11px;
+      color: var(--text-tertiary);
+    }
+    
+    .reply-timestamp.compact {
+      position: absolute;
+      left: -50px;
+      opacity: 0;
+      transition: opacity 0.2s ease;
+    }
+    
+    .thread-reply:hover .reply-timestamp.compact {
+      opacity: 1;
+    }
+    
+    .thread-reply.compact {
+      padding-top: 2px;
+      padding-bottom: 2px;
+      position: relative;
+    }
+    
+    .reply-content {
+      color: var(--text-secondary);
+      font-size: 14px;
+      line-height: 1.5;
+      margin-top: 2px;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+    
+    .loading {
+      text-align: center;
+      padding: 40px;
+      color: var(--text-tertiary);
+      font-size: 14px;
+    }
+    
+    .loading-spinner {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 2px solid var(--border-light);
+      border-top-color: var(--accent-primary);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-right: 8px;
+      vertical-align: middle;
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    
+    .empty-state {
+      text-align: center;
+      padding: 80px 24px;
+      color: var(--text-tertiary);
+    }
+    
+    .empty-state-icon {
+      font-size: 48px;
+      margin-bottom: 16px;
+      opacity: 0.3;
+    }
+    
+    .empty-state-text {
+      font-family: var(--serif);
+      font-size: 18px;
+      font-style: italic;
+      color: var(--text-secondary);
+    }
+    
+    .error-message {
+      background: #fee;
+      border: 1px solid #fcc;
+      color: #c33;
+      padding: 16px 24px;
+      margin: 24px;
+      border-radius: 8px;
+      font-size: 14px;
+    }
+    
+    .config-prompt {
+      max-width: 500px;
+      margin: 80px auto;
+      padding: 32px;
+      background: var(--bg-primary);
+      border: 1px solid var(--border-light);
+      border-radius: 12px;
+      box-shadow: var(--shadow-lg);
+    }
+    
+    .config-title {
+      font-family: var(--serif);
+      font-size: 24px;
+      font-style: italic;
+      margin-bottom: 24px;
+      color: var(--text-primary);
+    }
+    
+    .config-field {
+      margin-bottom: 16px;
+    }
+    
+    .config-label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      margin-bottom: 6px;
+    }
+    
+    .config-input {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid var(--border-medium);
+      border-radius: 6px;
+      font-family: var(--sans);
+      font-size: 14px;
+      color: var(--text-primary);
+      background: var(--bg-primary);
+      transition: all 0.15s ease;
+    }
+    
+    .config-input:focus {
+      outline: none;
+      border-color: var(--accent-primary);
+      box-shadow: 0 0 0 3px var(--accent-light);
+    }
+    
+    .config-button {
+      width: 100%;
+      padding: 12px;
+      background: var(--accent-primary);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-family: var(--sans);
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      margin-top: 8px;
+    }
+    
+    .config-button:hover {
+      background: var(--accent-hover);
+      transform: translateY(-1px);
+      box-shadow: var(--shadow-md);
+    }
+    
+    .config-button:active {
+      transform: translateY(0);
+    }
+    
+    /* Stagger animation for initial load */
+    .message-group:nth-child(1) { animation-delay: 0.02s; }
+    .message-group:nth-child(2) { animation-delay: 0.04s; }
+    .message-group:nth-child(3) { animation-delay: 0.06s; }
+    .message-group:nth-child(4) { animation-delay: 0.08s; }
+    .message-group:nth-child(5) { animation-delay: 0.10s; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef, useCallback } = React;
+
+    // Configuration Component
+    function ConfigPrompt({ onConfigSave }) {
+      const [url, setUrl] = useState('');
+      const [key, setKey] = useState('');
+
+      const handleSubmit = (e) => {
+        e.preventDefault();
+        if (url && key) {
+          localStorage.setItem('supabase_url', url);
+          localStorage.setItem('supabase_key', key);
+          onConfigSave(url, key);
+        }
+      };
+
+      return (
+        <div className="config-prompt">
+          <h1 className="config-title">Connect to Supabase</h1>
+          <form onSubmit={handleSubmit}>
+            <div className="config-field">
+              <label className="config-label">Supabase URL</label>
+              <input
+                type="text"
+                className="config-input"
+                placeholder="https://xxxxx.supabase.co"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                required
+              />
+            </div>
+            <div className="config-field">
+              <label className="config-label">Supabase Anon Key</label>
+              <input
+                type="password"
+                className="config-input"
+                placeholder="Your anon/public key"
+                value={key}
+                onChange={(e) => setKey(e.target.value)}
+                required
+              />
+            </div>
+            <button type="submit" className="config-button">
+              Connect
+            </button>
+          </form>
+        </div>
+      );
+    }
+
+    // Main App Component
+    function SlackViewer() {
+      const [supabase, setSupabase] = useState(null);
+      const [channels, setChannels] = useState([]);
+      const [selectedChannel, setSelectedChannel] = useState('');
+      const [messages, setMessages] = useState([]);
+      const [loading, setLoading] = useState(false);
+      const [loadingMore, setLoadingMore] = useState(false);
+      const [error, setError] = useState(null);
+      const [hasMore, setHasMore] = useState(true);
+      const [expandedThreads, setExpandedThreads] = useState(new Set());
+      const [threadReplies, setThreadReplies] = useState({});
+      const [userMap, setUserMap] = useState({});
+      
+      const messagesEndRef = useRef(null);
+      const scrollContainerRef = useRef(null);
+      const oldestTimestamp = useRef(null);
+
+      // Initialize Supabase
+      useEffect(() => {
+        const url = localStorage.getItem('supabase_url');
+        const key = localStorage.getItem('supabase_key');
+        
+        if (url && key) {
+          const client = window.supabase.createClient(url, key);
+          setSupabase(client);
+        }
+      }, []);
+
+      // Fetch channels
+      useEffect(() => {
+        if (!supabase) return;
+
+        async function fetchChannels() {
+          try {
+            console.log('[API] Fetching channels list');
+            // Get distinct channels by grouping
+            const { data, error } = await supabase
+              .from('messages')
+              .select('channel_id, channel_name')
+              .order('channel_id');
+
+            if (error) throw error;
+
+            // Get unique channels using a Map to preserve the first occurrence
+            const channelMap = new Map();
+            data.forEach(row => {
+              if (!channelMap.has(row.channel_id)) {
+                channelMap.set(row.channel_id, {
+                  id: row.channel_id,
+                  name: row.channel_name || row.channel_id
+                });
+              }
+            });
+
+            const uniqueChannels = Array.from(channelMap.values());
+            
+            // Sort by channel name
+            uniqueChannels.sort((a, b) => a.name.localeCompare(b.name));
+
+            console.log('Found channels:', uniqueChannels.length, uniqueChannels);
+
+            setChannels(uniqueChannels);
+            if (uniqueChannels.length > 0) {
+              setSelectedChannel(uniqueChannels[0].id);
+            }
+          } catch (err) {
+            setError('Failed to load channels: ' + err.message);
+          }
+        }
+
+        fetchChannels();
+      }, [supabase]);
+
+      // Load users for mention replacement
+      useEffect(() => {
+        if (!supabase) return;
+
+        async function loadUsers() {
+          try {
+            const { data, error } = await supabase
+              .from('users')
+              .select('*')
+              .eq('is_bot', false)
+              .order('real_name');
+
+            if (error) throw error;
+            
+            // Create user map for mention replacement
+            const map = {};
+            (data || []).forEach(user => {
+              map[user.id] = user;
+            });
+            setUserMap(map);
+          } catch (err) {
+            console.error('Failed to load users:', err);
+          }
+        }
+
+        loadUsers();
+      }, [supabase]);
+
+      // Fetch messages when channel changes
+      useEffect(() => {
+        if (!selectedChannel || !supabase) return;
+
+        async function fetchMessages() {
+          setLoading(true);
+          setError(null);
+          setMessages([]);
+          setExpandedThreads(new Set());
+          setThreadReplies({});
+          oldestTimestamp.current = null;
+          setHasMore(true);
+
+          try {
+            console.log('[API] Fetching initial messages for channel:', selectedChannel);
+            // Fetch parent messages (where thread_ts is null OR thread_ts equals the message's own ts)
+            const { data, error } = await supabase
+              .from('messages')
+              .select(`
+                *,
+                users:user_id (
+                  real_name,
+                  name,
+                  display_name
+                )
+              `)
+              .eq('channel_id', selectedChannel)
+              .order('timestamp', { ascending: false })
+              .limit(200);
+
+            if (error) throw error;
+
+            // Filter to only parent messages (thread_ts is null or equals raw_json.ts)
+            const parentMessages = data.filter(msg => 
+              !msg.thread_ts || msg.thread_ts === msg.raw_json?.ts
+            );
+
+            setMessages(parentMessages.reverse());
+            
+            if (data.length > 0) {
+              // Use the oldest message from ALL data (including replies)
+              oldestTimestamp.current = data[data.length - 1].timestamp;
+            }
+            
+            if (data.length < 200) {
+              setHasMore(false);
+            }
+
+            // Group replies from the initial batch by thread_ts
+            const repliesInBatch = {};
+            data.forEach(msg => {
+              if (msg.thread_ts && msg.thread_ts !== msg.raw_json?.ts) {
+                if (!repliesInBatch[msg.thread_ts]) {
+                  repliesInBatch[msg.thread_ts] = [];
+                }
+                repliesInBatch[msg.thread_ts].push(msg);
+              }
+            });
+
+            // Automatically fetch all replies for messages with threads
+            const threadsToExpand = new Set();
+            const repliesMap = {};
+            
+            for (const msg of parentMessages) {
+              if (msg.raw_json?.reply_count > 0 && msg.raw_json?.ts) {
+                threadsToExpand.add(msg.id);
+                const threadTs = msg.raw_json.ts;
+                const expectedReplyCount = msg.raw_json.reply_count;
+                
+                // Check if we have replies in the batch
+                const cachedReplies = repliesInBatch[threadTs] || [];
+                
+                if (cachedReplies.length === expectedReplyCount) {
+                  // We have all replies in the batch, use them
+                  console.log(`[API] Initial load: Using ${cachedReplies.length} cached replies for thread ${threadTs}`);
+                  repliesMap[msg.id] = cachedReplies.sort((a, b) => 
+                    new Date(a.timestamp) - new Date(b.timestamp)
+                  );
+                } else {
+                  // Need to fetch complete thread
+                  console.log(`[API] Initial load: Fetching replies for thread ${threadTs} (cached: ${cachedReplies.length}/${expectedReplyCount})`);
+                  try {
+                    const { data: replyData, error: replyError } = await supabase
+                      .from('messages')
+                      .select(`
+                        *,
+                        users:user_id (
+                          real_name,
+                          name,
+                          display_name
+                        )
+                      `)
+                      .eq('channel_id', selectedChannel)
+                      .eq('thread_ts', threadTs)
+                      .order('timestamp', { ascending: true });
+
+                    if (!replyError && replyData) {
+                      // Filter out the parent message
+                      const replies = replyData.filter(reply => reply.raw_json?.ts !== threadTs);
+                      repliesMap[msg.id] = replies;
+                      console.log(`[API] Fetched ${replies.length} replies from API`);
+                    }
+                  } catch (err) {
+                    console.error('Failed to load replies for message:', msg.id, err);
+                  }
+                }
+              }
+            }
+            
+            setExpandedThreads(threadsToExpand);
+            setThreadReplies(repliesMap);
+
+            // Scroll to bottom
+            setTimeout(() => {
+              if (messagesEndRef.current) {
+                messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+              }
+            }, 100);
+          } catch (err) {
+            setError('Failed to load messages: ' + err.message);
+          } finally {
+            setLoading(false);
+          }
+        }
+
+        fetchMessages();
+      }, [selectedChannel, supabase]);
+
+      // Load more messages
+      const loadMoreMessages = async () => {
+        if (!supabase || !oldestTimestamp.current || loadingMore) return;
+
+        setLoadingMore(true);
+        try {
+          console.log('[API] Loading earlier messages before timestamp:', oldestTimestamp.current);
+          // Fetch more messages than we need to account for filtering
+          const { data, error } = await supabase
+            .from('messages')
+            .select(`
+              *,
+              users:user_id (
+                real_name,
+                name,
+                display_name
+              )
+            `)
+            .eq('channel_id', selectedChannel)
+            .lt('timestamp', oldestTimestamp.current)
+            .order('timestamp', { ascending: false })
+            .limit(200); // Fetch more to ensure we get enough parent messages
+
+          if (error) throw error;
+
+          // Filter to only parent messages
+          const parentMessages = data.filter(msg => 
+            !msg.thread_ts || msg.thread_ts === msg.raw_json?.ts
+          );
+
+          if (parentMessages.length > 0) {
+            // parentMessages is in descending order (newest first)
+            // After reverse, oldest will be at the end
+            const reversedMessages = parentMessages.reverse();
+            setMessages(prev => [...reversedMessages, ...prev]);
+            // IMPORTANT: Update oldest timestamp based on ALL messages (including replies)
+            // not just parent messages, to ensure we don't skip replies on next load
+            if (data.length > 0) {
+              // data is already in descending order, so last element is oldest
+              oldestTimestamp.current = data[data.length - 1].timestamp;
+            }
+            
+            // Group replies from current batch by thread_ts
+            const repliesInCurrentBatch = {};
+            data.forEach(msg => {
+              if (msg.thread_ts && msg.thread_ts !== msg.raw_json?.ts) {
+                if (!repliesInCurrentBatch[msg.thread_ts]) {
+                  repliesInCurrentBatch[msg.thread_ts] = [];
+                }
+                repliesInCurrentBatch[msg.thread_ts].push(msg);
+              }
+            });
+
+            // Check existing messages for replies (using prev state before update)
+            const repliesInExistingMessages = {};
+            messages.forEach(msg => {
+              if (msg.thread_ts && msg.thread_ts !== msg.raw_json?.ts) {
+                if (!repliesInExistingMessages[msg.thread_ts]) {
+                  repliesInExistingMessages[msg.thread_ts] = [];
+                }
+                repliesInExistingMessages[msg.thread_ts].push(msg);
+              }
+            });
+            
+            // Automatically fetch replies for these older messages
+            const newThreadsToExpand = new Set(expandedThreads);
+            const newRepliesMap = {...threadReplies};
+            
+            for (const msg of parentMessages) {
+              if (msg.raw_json?.reply_count > 0 && msg.raw_json?.ts) {
+                const threadTs = msg.raw_json.ts;
+                const expectedReplyCount = msg.raw_json.reply_count;
+                
+                // Check if we already have complete replies in threadReplies state
+                if (newRepliesMap[msg.id] && newRepliesMap[msg.id].length === expectedReplyCount) {
+                  console.log(`[API] Thread ${threadTs} already complete in state (${expectedReplyCount} replies)`);
+                  newThreadsToExpand.add(msg.id);
+                  continue;
+                }
+                
+                // Check all sources for existing replies
+                const allExistingReplies = [
+                  ...(newRepliesMap[msg.id] || []),
+                  ...(repliesInExistingMessages[threadTs] || []),
+                  ...(repliesInCurrentBatch[threadTs] || [])
+                ];
+                
+                // Remove duplicates by id
+                const uniqueReplies = Array.from(
+                  new Map(allExistingReplies.map(r => [r.id, r])).values()
+                );
+                
+                console.log(`[API] Thread ${threadTs}: expected ${expectedReplyCount}, found ${uniqueReplies.length} in cache`);
+                
+                // If we have all expected replies, use them; otherwise fetch from API
+                if (uniqueReplies.length === expectedReplyCount) {
+                  console.log('[API] Using complete cached replies');
+                  newRepliesMap[msg.id] = uniqueReplies.sort((a, b) => 
+                    new Date(a.timestamp) - new Date(b.timestamp)
+                  );
+                  newThreadsToExpand.add(msg.id);
+                } else {
+                  // Fetch complete thread from API to ensure we have everything
+                  console.log(`[API] Incomplete cache (${uniqueReplies.length}/${expectedReplyCount}), fetching from API`);
+                  newThreadsToExpand.add(msg.id);
+                  
+                  try {
+                    const { data: replyData, error: replyError } = await supabase
+                      .from('messages')
+                      .select(`
+                        *,
+                        users:user_id (
+                          real_name,
+                          name,
+                          display_name
+                        )
+                      `)
+                      .eq('channel_id', selectedChannel)
+                      .eq('thread_ts', threadTs)
+                      .order('timestamp', { ascending: true });
+
+                    if (!replyError && replyData) {
+                      const replies = replyData.filter(reply => reply.raw_json?.ts !== threadTs);
+                      newRepliesMap[msg.id] = replies;
+                      console.log('[API] Fetched', replies.length, 'replies from API');
+                    }
+                  } catch (err) {
+                    console.error('Failed to load replies for message:', msg.id, err);
+                  }
+                }
+              }
+            }
+            
+            setExpandedThreads(newThreadsToExpand);
+            setThreadReplies(newRepliesMap);
+          }
+          
+          // If we got fewer raw messages than requested, we've reached the end
+          if (data.length < 200) {
+            setHasMore(false);
+          }
+        } catch (err) {
+          setError('Failed to load more messages: ' + err.message);
+        } finally {
+          setLoadingMore(false);
+        }
+      };
+
+      // Toggle thread
+      const toggleThread = (messageId) => {
+        const isExpanded = expandedThreads.has(messageId);
+        const newExpanded = new Set(expandedThreads);
+        
+        if (isExpanded) {
+          newExpanded.delete(messageId);
+        } else {
+          newExpanded.add(messageId);
+        }
+        
+        setExpandedThreads(newExpanded);
+      };
+
+      // Format timestamp
+      const formatTimestamp = (timestamp) => {
+        const date = new Date(timestamp);
+        const now = new Date();
+        const isToday = date.toDateString() === now.toDateString();
+        
+        const timeStr = date.toLocaleTimeString('en-US', { 
+          hour: 'numeric', 
+          minute: '2-digit',
+          hour12: true 
+        });
+
+        if (isToday) {
+          return timeStr;
+        } else {
+          const dateStr = date.toLocaleDateString('en-US', { 
+            month: 'short', 
+            day: 'numeric' 
+          });
+          return `${dateStr} at ${timeStr}`;
+        }
+      };
+
+      // Get display name for a user
+      const getUserDisplayName = (user) => {
+        if (!user) return 'Unknown';
+        return user.display_name || user.real_name || user.name || 'Unknown';
+      };
+
+      // Render message content with mentions replaced
+      const renderMessageContent = (text) => {
+        if (!text) return text;
+        
+        const parts = [];
+        let lastIndex = 0;
+        const mentionRegex = /<@([A-Z0-9]+)>/g;
+        let match;
+
+        while ((match = mentionRegex.exec(text)) !== null) {
+          // Add text before mention
+          if (match.index > lastIndex) {
+            parts.push(text.substring(lastIndex, match.index));
+          }
+          
+          // Add mention
+          const userId = match[1];
+          const user = userMap[userId];
+          const displayName = user ? getUserDisplayName(user) : userId;
+          parts.push(
+            <span key={match.index} className="user-mention">
+              @{displayName}
+            </span>
+          );
+          
+          lastIndex = match.index + match[0].length;
+        }
+        
+        // Add remaining text
+        if (lastIndex < text.length) {
+          parts.push(text.substring(lastIndex));
+        }
+        
+        return parts.length > 0 ? parts : text;
+      };
+
+      // Handle config save
+      const handleConfigSave = (url, key) => {
+        const client = window.supabase.createClient(url, key);
+        setSupabase(client);
+      };
+
+      if (!supabase) {
+        return <ConfigPrompt onConfigSave={handleConfigSave} />;
+      }
+
+      return (
+        <>
+          <header className="app-header">
+            <h1 className="app-title">Slack Archive</h1>
+            {channels.length > 0 && (
+              <div className="channel-selector">
+                <select 
+                  className="channel-select"
+                  value={selectedChannel}
+                  onChange={(e) => setSelectedChannel(e.target.value)}
+                >
+                  {channels.map(channel => (
+                    <option key={channel.id} value={channel.id}>
+                      #{channel.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </header>
+
+          <main className="main-container">
+            <div className="messages-container">
+              <div className="messages-scroll" ref={scrollContainerRef}>
+                {hasMore && messages.length > 0 && (
+                  <div className="load-more-container">
+                    <button 
+                      className="load-more-btn"
+                      onClick={loadMoreMessages}
+                      disabled={loadingMore}
+                    >
+                      {loadingMore ? (
+                        <>
+                          <span className="loading-spinner"></span>
+                          Loading...
+                        </>
+                      ) : (
+                        'Load earlier messages'
+                      )}
+                    </button>
+                  </div>
+                )}
+
+                {error && (
+                  <div className="error-message">{error}</div>
+                )}
+
+                {loading ? (
+                  <div className="loading">
+                    <span className="loading-spinner"></span>
+                    Loading messages...
+                  </div>
+                ) : messages.length === 0 ? (
+                  <div className="empty-state">
+                    <div className="empty-state-icon">💬</div>
+                    <div className="empty-state-text">No messages in this channel</div>
+                  </div>
+                ) : (
+                  messages.map((message, index) => {
+                    // Check if previous message is from the same author
+                    const prevMessage = index > 0 ? messages[index - 1] : null;
+                    const sameAuthor = prevMessage && 
+                      prevMessage.user_id === message.user_id &&
+                      !prevMessage.raw_json?.reply_count; // Don't compact if previous message has a thread
+                    
+                    return (
+                      <div 
+                        key={message.id} 
+                        className={`message-group ${sameAuthor ? 'compact' : ''}`}
+                        data-message-ts={message.raw_json?.ts}
+                      >
+                        <div className={`message-header ${sameAuthor ? 'hidden' : ''}`}>
+                          <span className="message-author">
+                            {getUserDisplayName(message.users)}
+                          </span>
+                          <span className="message-timestamp">
+                            {formatTimestamp(message.timestamp)}
+                          </span>
+                        </div>
+                        {sameAuthor && (
+                          <span className="message-timestamp compact">
+                            {formatTimestamp(message.timestamp)}
+                          </span>
+                        )}
+                        <div className="message-content">
+                          {renderMessageContent(message.text)}
+                        </div>
+                        
+                        {message.raw_json?.reply_count > 0 && (
+                          <div className="thread-container">
+                            <button 
+                              className="thread-toggle"
+                              onClick={() => toggleThread(message.id)}
+                            >
+                              {expandedThreads.has(message.id) ? '▼' : '▶'} 
+                              {message.raw_json.reply_count} {message.raw_json.reply_count === 1 ? 'reply' : 'replies'}
+                            </button>
+                            
+                            {expandedThreads.has(message.id) && threadReplies[message.id] && (
+                              <div>
+                                {threadReplies[message.id].length === 0 ? (
+                                  <div style={{fontSize: '13px', color: 'var(--text-tertiary)', marginTop: '8px'}}>
+                                    No replies found
+                                  </div>
+                                ) : (
+                                  threadReplies[message.id].map((reply, replyIndex) => {
+                                    // Check if previous reply is from the same author
+                                    const prevReply = replyIndex > 0 ? threadReplies[message.id][replyIndex - 1] : null;
+                                    const sameReplyAuthor = prevReply && prevReply.user_id === reply.user_id;
+                                    
+                                    return (
+                                      <div 
+                                        key={reply.id} 
+                                        className={`thread-reply ${sameReplyAuthor ? 'compact' : ''}`}
+                                        data-reply-ts={reply.raw_json?.ts}
+                                      >
+                                        <div>
+                                          <span className={`reply-author ${sameReplyAuthor ? 'hidden' : ''}`}>
+                                            {getUserDisplayName(reply.users)}
+                                          </span>
+                                          <span className={`reply-timestamp ${sameReplyAuthor ? 'compact' : ''}`}>
+                                            {formatTimestamp(reply.timestamp)}
+                                          </span>
+                                        </div>
+                                        <div className="reply-content">
+                                          {renderMessageContent(reply.text)}
+                                        </div>
+                                      </div>
+                                    );
+                                  })
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
+                )}
+                <div ref={messagesEndRef} />
+              </div>
+            </div>
+          </main>
+        </>
+      );
+    }
+
+    ReactDOM.render(<SlackViewer />, document.getElementById('root'));
+  </script>
+</body>
+</html>
