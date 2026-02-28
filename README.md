@@ -51,3 +51,8 @@ Typical response:
   }
 }
 ```
+
+Running the sync:
+```
+run: node src/sync.js
+```
