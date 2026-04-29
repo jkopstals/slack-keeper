@@ -56,3 +56,5 @@ Running the sync:
 ```
 run: node src/sync.js
 ```
+
+running hourly on github workers
